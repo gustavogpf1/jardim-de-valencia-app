@@ -1,0 +1,67 @@
+workflows:
+  flutter_release:
+    name: Flutter • Android (APK/AAB) e iOS (IPA)
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      vars:
+        ANDROID_APP_ID: br.com.jardimdevalencia.app
+    scripts:
+      - name: Preparar projeto
+        script: |
+          flutter --version
+          if [ ! -d android ] || [ ! -d ios ]; then
+            flutter create .
+          fi
+      - name: Injetar google-services.json (Android)
+        script: |
+          if [ ! -z "$GOOGLE_SERVICES_JSON_B64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > android/app/google-services.json
+          fi
+          if ! grep -q "com.google.gms.google-services" android/app/build.gradle; then
+            echo "apply plugin: 'com.google.gms.google-services'" >> android/app/build.gradle
+          fi
+          if ! grep -q "com.google.gms:google-services" android/build.gradle; then
+            sed -i.bak 's/dependencies {/dependencies {\n        classpath "com.google.gms:google-services:4.3.15"/' android/build.gradle
+          fi
+      - name: Assinatura Android (upload key)
+        script: |
+          if [ ! -z "$ANDROID_KEYSTORE_B64" ]; then
+            echo "$ANDROID_KEYSTORE_B64" | base64 --decode > /tmp/upload-keystore.jks
+            cat > android/key.properties <<EOF
+            storePassword=$ANDROID_KEYSTORE_PASSWORD
+            keyPassword=$ANDROID_KEY_PASSWORD
+            keyAlias=$ANDROID_KEY_ALIAS
+            storeFile=/tmp/upload-keystore.jks
+            EOF
+            if ! grep -q "signingConfigs" android/app/build.gradle; then
+              sed -i.bak 's/android {/android {\n    signingConfigs {\n        release {\n            storeFile file("\/tmp\/upload-keystore.jks")\n            storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("ANDROID_KEY_ALIAS")\n            keyPassword System.getenv("ANDROID_KEY_PASSWORD")\n        }\n    }/' android/app/build.gradle
+            fi
+            sed -i.bak 's/release {/release {\n            signingConfig signingConfigs.release/' android/app/build.gradle || true
+          fi
+      - name: Ajustar applicationId (Android)
+        script: |
+          if [ ! -z "$ANDROID_APP_ID" ]; then
+            sed -i.bak "s/applicationId \".*\"/applicationId \"$ANDROID_APP_ID\"/" android/app/build.gradle || true
+          fi
+      - name: Build Android AAB/APK
+        script: |
+          flutter pub get
+          flutter build appbundle --release
+          flutter build apk --release
+      - name: Build iOS IPA (sem assinatura)
+        script: |
+          flutter build ipa --release --no-codesign
+    artifacts:
+      - build/**/**.aab
+      - build/**/**.apk
+      - build/**/Runner.ipa
+    publishing:
+      email:
+        recipients:
+          - SEU_EMAIL@EXEMPLO.COM
+        notify:
+          success: true
+          failure: true
